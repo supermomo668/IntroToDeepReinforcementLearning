@@ -1,0 +1,11 @@
+tqdm
+future
+gym
+scipy
+six
+seaborn
+numpy
+scipy
+box2d-py
+torch
+matplotlib
