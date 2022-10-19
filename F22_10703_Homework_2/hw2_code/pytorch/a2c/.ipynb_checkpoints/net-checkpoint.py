@@ -12,15 +12,7 @@ class NeuralNet(torch.nn.Module):
         self.linear3 = torch.nn.Linear(layers[1], layers[2])
         self.activation3 = torch.nn.ReLU()
 
-        self.output_layer = torch.nn.Linear(layers[2], output_size)
-        if activation is None:
-            activation = torch.nn.ReLU()
-        else:
-            if output_layer > 2:
-                activation = torch.nn.Sigmoid()
-            else:
-                activation = torch.nn.Softmax(axis=1)
-                
+        self.output_layer = torch.nn.Linear(layers[2], output_size)                
         self.output_activation = activation
 
         #initialize weights, following 'fan_avg' approach
