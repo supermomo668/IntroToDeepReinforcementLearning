@@ -69,28 +69,25 @@ class A2C(object):
         self.actor_optimizer = torch.optim.Adam(actor.parameters(), lr=actor_lr)
         assert self.type is not None, "Type must be provided"
 
-    def reinforce_criterion(self, y_pred, y_true):
-        log_y_pred = torch.log(y_pred)   # log probability of ation
-        l = torch.multiply(log_y_pred, y_true)   # (n_eps, nA)
-        l_action = torch.sum(l, axis=1)  # (n_eps,)
-        return torch.mean(l_action)
+    def reinforce_criterion(self, y_action_logprob, y_target):
+        loss = - torch.multiply(y_action_logprob, y_target)    # shape (t,)
+        return torch.mean(loss)
     
     def baseline_criterion(self, y_pred, y_true):
         return torch.mean(torch.square(y_true-y_pred))
         
-    def fit_model(self, X_states, y_target, model, criterion, epochs=1, batch_size=1):
+    def fit_model(self, y_action, y_target, model, criterion, epochs=1, batch_size=1):
         """
         Fit x (states) -> y (expected sum of reward/values)
         """
         self.actor.train()
-        n_example = len(X_states)
+        n_example = len(y_action)
         history = dict.fromkeys(['loss'],[])
         for e in range(epochs):
             for i in range(int(np.ceil(n_example/batch_size))):
                 start_idx, end_idx = batch_size*i, min(batch_size*(i+1), n_example)
-                x, y = X_states[start_idx: end_idx], y_target[start_idx: end_idx]
-                pred_y = model(x)  # (*, t, nA)
-                loss = criterion(pred_y, y)
+                y_action_, y_target_ = y_action[start_idx: end_idx], y_target[start_idx: end_idx]
+                loss = criterion(y_action_, y_target_)
                 # # measure metrics and record loss
                 history['loss'].append(loss)
                 self.actor_optimizer.zero_grad()
@@ -144,33 +141,31 @@ class A2C(object):
             # add to history
             states.append(np.expand_dims(s, axis=0))
             actions.append(action_OH)
-            action_logprobs.append(ac_logprob.cpu().detach().numpy())
+            action_logprobs.append(ac_logprob)
             rewards.append(r)
             curr_state = copy.deepcopy(s)
         if DEBUG: print(f"action probs:{ac_logprob}\nfinal action:{action_OH}")
         print("Finished after {} timesteps".format(cts+1))
-        #env.close()
 		# flatten 
-        states=np.reshape(np.array(states), (-1, nS))
-        actions=np.reshape(np.array(actions), (-1, nA))
-        return np.stack(states), np.stack(actions), np.stack(rewards), np.stack(action_logprobs)
+        return np.stack(states), np.stack(actions), np.stack(rewards), torch.stack(action_logprobs)
 
     def get_G(self, rewards, gamma, a2c_v_end=None):
-        G_tot=[0]
+        # get sum of discounted reward vector : [sum : r*gamma*0...r*gamma*n]
+        G_t=[0]
         if self.type == 0 or self.type == 1:
-            # get discounted reward vector : [sum : r*gamma*0...r*gamma*n]
             for n_gamma, r in enumerate(reversed(rewards)):
                 # insert from last reward to beginning 
-                G_tot.insert(0, r+gamma**n_gamma*G_tot[0])
-            if DEBUG: print(f"Sum of Expected Rewards G:{G_tot}")
-            G_tot=np.array(G_tot[:-1])
+                G_t.insert(0, r+gamma**n_gamma*G_t[0])
+            if DEBUG: print(f"Sum of Expected Rewards G:{G_t}")
+            G_t=np.array(G_t[:-1])
         elif self.type == 2:
+            a2c_v_end = a2c_v_end.cpu().detach().numpy().flatten()
             for t in range(len(rewards)):
                 g_t = 0 if t+self.n>len(rewards) else (gamma**self.n)*a2c_v_end[t+self.N]
                 for k in range(min(self.N-1, len(rewards)-1)):
                     g_t += (gamma**k)*rewards[t+k]
-                G_tot.append(g_t)
-        return G_tot
+                G_t.append(g_t)
+        return torch.FloatTensor(G_t).to(device)
         
     def train(self, env, gamma=0.99, n=10):
         """
@@ -187,26 +182,22 @@ class A2C(object):
         env = wrap_env(env)
         mean_total, std_total = [], []
         # generate episode
-        states, actions, rewards, actions_logprob = self.generate_episode(env)
-        states = states[:-1]   # remove the last pseudo state
-        states = torch.Tensor(states).cuda()
+        states, actions, rewards, action_logprobs = self.generate_episode(env)
+        states = torch.Tensor(states[:-1]).to(device)   # remove the last pseudo state
         if self.type != 2:   # Reinforce / baseline
-            G_tot = self.get_G(rewards, gamma)
+            G_t = self.get_G(rewards, gamma)
         if self.type == 1 or self.type == 2:
-            baseline_value = self.critic(states)   # (t, 1) 
-            baseline_value = baseline_value.cpu().detach().numpy().flatten()
+            baseline_value = self.critic(states)   # (1, t)
             if self.type ==2:  # A2C N-step 
-                G_tot = self.get_G(rewards, gamma, baseline_value)
-            G_tot = np.subtract(G_tot, baseline_value)
+                G_t = self.get_G(rewards, gamma, baseline_value)
+            G_t = torch.subtract(G_t, baseline_value)
         # weight actions by rewards/advantage and fit model 
-        G_total_actions = np.multiply(G_tot, actions_logprob)    # shape (t,)
-        G_total_actions = torch.Tensor(G_total_actions).cuda()
         actor_history = self.fit_model(
-            states, G_total_actions, self.actor, self.reinforce_criterion, batch_size=int(len(states)*batch_size_ratio),
+            action_logprobs, G_t, self.actor, self.reinforce_criterion, batch_size=int(len(states)*batch_size_ratio),
         )
         if self.type == 1 or self.type == 2:   # require a baseline value (A2C/Baseline)
             critic_history = self.fit_model(
-                states, G_total_actions, self.critic, self.baseline_criterion, batch_size=int(len(states)*batch_size_ratio),
+                states, G_t, self.critic, self.baseline_criterion, batch_size=int(len(states)*batch_size_ratio),
             )
         return actor_history
     
