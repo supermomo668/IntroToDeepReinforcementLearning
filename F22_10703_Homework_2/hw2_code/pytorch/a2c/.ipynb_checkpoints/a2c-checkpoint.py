@@ -76,7 +76,7 @@ class A2C(object):
     def baseline_criterion(self, y_pred, y_true):
         return torch.mean(torch.square(y_true-y_pred))
         
-    def fit_model(self, y_action, y_target, model, criterion, epochs=1, batch_size=1):
+    def fit_model(self, y_action, y_target, optimizer, criterion, epochs=1, batch_size=1):
         """
         Fit x (states) -> y (expected sum of reward/values)
         """
@@ -90,9 +90,9 @@ class A2C(object):
                 loss = criterion(y_action_, y_target_)
                 # # measure metrics and record loss
                 history['loss'].append(loss)
-                self.actor_optimizer.zero_grad()
-                loss.backward()
-                self.actor_optimizer.step()
+                optimizer.zero_grad()
+                loss.backward(retain_graph=True)
+                optimizer.step()
                 if DEBUG: print(f"Latest Loss:{history['loss'][-1]}")
         return history
 
@@ -186,18 +186,20 @@ class A2C(object):
         states = torch.Tensor(states[:-1]).to(device)   # remove the last pseudo state
         if self.type != 2:   # Reinforce / baseline
             G_t = self.get_G(rewards, gamma)
-        if self.type == 1 or self.type == 2:
+        if self.type == 1 or self.type == 2:  # baseline/A2C subtraction
             baseline_value = self.critic(states)   # (1, t)
             if self.type ==2:  # A2C N-step 
                 G_t = self.get_G(rewards, gamma, baseline_value)
-            G_t = torch.subtract(G_t, baseline_value)
+            G_t_adj = torch.subtract(G_t, baseline_value)
+        else:
+            G_t_adj = G_t  # no baseline
         # weight actions by rewards/advantage and fit model 
         actor_history = self.fit_model(
-            action_logprobs, G_t, self.actor, self.reinforce_criterion, batch_size=int(len(states)*batch_size_ratio),
+            action_logprobs, G_t_adj, self.actor_optimizer, self.reinforce_criterion, batch_size=int(len(states)*batch_size_ratio),
         )
         if self.type == 1 or self.type == 2:   # require a baseline value (A2C/Baseline)
             critic_history = self.fit_model(
-                states, G_t, self.critic, self.baseline_criterion, batch_size=int(len(states)*batch_size_ratio),
+                baseline_value, G_t, self.critic_optimizer, self.baseline_criterion, batch_size=int(len(states)*batch_size_ratio),
             )
         return actor_history
     
