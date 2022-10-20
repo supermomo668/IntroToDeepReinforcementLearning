@@ -228,9 +228,9 @@ def main_a2c(args):
         # TODO: create networks and setup reinforce/a2c
         history = dict.fromkeys(['train','test'],[])
         actor = NeuralNet(input_size=nS, output_size=nA, 
-                          activation=nn.Softmax(dim=1)).cuda()
+                          activation=nn.Softmax(dim=1)).to(device)
         critic = NeuralNet(input_size=nS, output_size=1, 
-                           activation=nn.LeakyReLU(0.9)).cuda()
+                           activation=nn.LeakyReLU(0.9)).to(device)
         A2C_net = A2C(actor=actor, actor_lr=args.lr, N=args.n, nA=nA, 
                       critic=critic, critic_lr=args.critic_lr, baseline=args.use_baseline, a2c=False)
         for m in range(args.num_episodes):
