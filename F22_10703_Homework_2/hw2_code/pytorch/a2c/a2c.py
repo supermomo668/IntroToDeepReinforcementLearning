@@ -70,7 +70,7 @@ class A2C(object):
         assert self.type is not None, "Type must be provided"
 
     def reinforce_criterion(self, y_action_logprob, y_target):
-        loss = - torch.multiply(y_action_logprob, y_target)    # shape (t,)
+        loss = -1.0*torch.multiply(y_action_logprob, y_target)    # shape (t,)
         return torch.mean(loss)
     
     def baseline_criterion(self, y_pred, y_true):
@@ -250,7 +250,7 @@ def main_a2c(args):
                 reward_means.append(reward_mean)
                 history['test'].append(G)
         res[i] = np.array(reward_means)
-    return history, res
+    return history, res, A2C_net
     
 if __name__=="__main__":
     import argparse, matplotlib.pyplot as plt, tqdm
