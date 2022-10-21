@@ -160,8 +160,8 @@ class A2C(object):
             G_t=np.array(G_t[:-1])
         elif self.type == 2:
             a2c_v_end = a2c_v_end.cpu().detach().numpy().flatten()
-            for t in range(len(rewards)):
-                g_t = 0 if t+self.n>len(rewards) else (gamma**self.n)*a2c_v_end[t+self.N]
+            for t in range(len(rewards)-1):
+                g_t = 0 if t+self.N>=len(rewards) else (gamma**self.N)*a2c_v_end[t+self.N]
                 for k in range(min(self.N-1, len(rewards)-1)):
                     g_t += (gamma**k)*rewards[t+k]
                 G_t.append(g_t)
@@ -234,7 +234,7 @@ def main_a2c(args):
         critic = NeuralNet(input_size=nS, output_size=1, 
                            activation=nn.LeakyReLU(0.9)).to(device)
         A2C_net = A2C(actor=actor, actor_lr=args.lr, N=args.n, nA=nA, 
-                      critic=critic, critic_lr=args.critic_lr, baseline=args.use_baseline, a2c=False)
+                      critic=critic, critic_lr=args.critic_lr, baseline=args.use_baseline, a2c=args.use_a2c)
         for m in range(args.num_episodes):
             print("Episode: {}".format(m))
             history['train'].append(A2C_net.train(env, gamma=gamma))
@@ -284,7 +284,7 @@ if __name__=="__main__":
         return parser.parse_args()
     
     args = parse_a2c_arguments()
-    history, res = main_a2c(args)
+    history, res, A2C_net = main_a2c(args)
     
     ks = np.arange(l)*100
     avs = np.mean(res, axis=0)
