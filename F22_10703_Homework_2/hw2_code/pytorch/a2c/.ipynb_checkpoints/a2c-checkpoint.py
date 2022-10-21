@@ -58,10 +58,9 @@ class A2C(object):
         # define run variabless
         if self.type == 2 or self.type == 1:   # Baseline or A2C
             self.critic = critic
-            if self.type == 1:   # Baseline
-                self.critic.to(device)
-                self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
-            else:  # A2C
+            self.critic.to(device)
+            self.critic_optimizer = torch.optim.Adam(critic.parameters(), lr=critic_lr)
+            if self.type ==2 :
                 self.N = N
         else:   # Reinforce
             pass
