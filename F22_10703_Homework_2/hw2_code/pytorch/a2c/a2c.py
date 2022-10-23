@@ -23,19 +23,6 @@ print(f"Using device:{device}")
 Utility functions to enable video recording of gym environment and displaying it
 To enable video, just do "env = wrap_env(env)""
 """
-def show_video():
-    mp4list = glob.glob('video/*.mp4')
-    if len(mp4list) > 0:
-        mp4 = mp4list[0]
-        video = io.open(mp4, 'r+b').read()
-        encoded = base64.b64encode(video)
-        ipythondisplay.display(HTML(data='''<video alt="test" autoplay 
-                    loop controls style="height: 400px;">
-                    <source src="data:video/mp4;base64,{0}" type="video/mp4" />
-                 </video>'''.format(encoded.decode('ascii'))))
-    else: 
-        print("Could not find video")
-    
 
 def wrap_env(env, save_path=proj_folder/'video'):
     save_path.mkdir(parents=True, exist_ok=True)
@@ -51,35 +38,35 @@ class A2C(object):
         #       a2c is true if we use a2c else reinforce
         # TODO: Initializes A2C.
         self.all_types = ['Reinforce','Baseline','A2C']
-        self.type = 2 if a2c else (1 if baseline else 0)  # Pick one of: "A2C", "Baseline", "Reinforce"
-        
+        self.type = 2 if a2c else (1 if baseline else 0)  # Pick one of: "A2C", "Baseline", "Reinforce"        
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        actor.to(device)
+        print(f"Run type:{self.all_types[self.type]}|Device:{device}")
+        
         # define run variabless
         if self.type == 2 or self.type == 1:   # Baseline or A2C
-            self.critic = critic
-            self.critic.to(device)
+            self.critic = critic.to(device)
             self.critic_optimizer = torch.optim.Adam(critic.parameters(), lr=critic_lr)
             if self.type ==2 :
                 self.N = N
         else:   # Reinforce
             pass
-        self.actor = actor
+        self.actor = actor.to(device)
         self.actor_optimizer = torch.optim.Adam(actor.parameters(), lr=actor_lr)
         assert self.type is not None, "Type must be provided"
 
     def reinforce_criterion(self, y_action_logprob, y_target):
-        loss = -1.0*torch.multiply(y_action_logprob, y_target)    # shape (t,)
-        return torch.mean(loss)
+        loss = torch.multiply(y_action_logprob, y_target)    # shape (t,)
+        return -1.0*torch.mean(loss)
     
     def baseline_criterion(self, y_pred, y_true):
         return torch.mean(torch.square(y_true-y_pred))
         
-    def fit_model(self, y_action, y_target, optimizer, criterion, epochs=1, batch_size=1):
+    def fit_model(self, y_action, y_target, optimizer, criterion, epochs=1, batch_size=1, retain_graph:bool=True):
         """
         Fit x (states) -> y (expected sum of reward/values)
         """
         self.actor.train()
+        assert y_action.shape==y_target.shape, f"shape mismatch{y_action.shape,y_target.shape}"
         n_example = len(y_action)
         history = dict.fromkeys(['loss'],[])
         for e in range(epochs):
@@ -90,7 +77,7 @@ class A2C(object):
                 # # measure metrics and record loss
                 history['loss'].append(loss)
                 optimizer.zero_grad()
-                loss.backward(retain_graph=True)
+                loss.backward(retain_graph=retain_graph)
                 optimizer.step()
                 if DEBUG: print(f"Latest Loss:{history['loss'][-1]}")
         return history
@@ -142,16 +129,15 @@ class A2C(object):
             actions.append(action_OH)
             action_logprobs.append(ac_logprob)
             rewards.append(r)
-            curr_state = copy.deepcopy(s)
         if DEBUG: print(f"action probs:{ac_logprob}\nfinal action:{action_OH}")
-        print("Finished after {} timesteps".format(cts+1))
-		# flatten 
-        return np.stack(states), np.stack(actions), np.stack(rewards), torch.stack(action_logprobs)
+        #print("Finished after {} timesteps".format(cts+1))
+		# return shapes: (t, nS), (t, nA), (t,), (t,)
+        return np.squeeze(np.stack(states),1), np.stack(actions), np.stack(rewards), torch.stack(action_logprobs).unsqueeze(1)
 
     def get_G(self, rewards, gamma, a2c_v_end=None):
         # get sum of discounted reward vector : [sum : r*gamma*0...r*gamma*n]
-        G_t=[0]
         if self.type == 0 or self.type == 1:
+            G_t=[0]
             for n_gamma, r in enumerate(reversed(rewards)):
                 # insert from last reward to beginning 
                 G_t.insert(0, r+gamma**n_gamma*G_t[0])
@@ -159,12 +145,14 @@ class A2C(object):
             G_t=np.array(G_t[:-1])
         elif self.type == 2:
             a2c_v_end = a2c_v_end.cpu().detach().numpy().flatten()
-            for t in range(len(rewards)-1):
-                g_t = 0 if t+self.N>=len(rewards) else (gamma**self.N)*a2c_v_end[t+self.N]
-                for k in range(min(self.N-1, len(rewards)-1)):
+            G_t = []
+            for t in range(len(rewards)):
+                g_t = (gamma**self.N)*a2c_v_end[t+self.N] if t+self.N<len(rewards) else 0
+                for k in range(min(self.N-1, len(rewards)-1-t)):
                     g_t += (gamma**k)*rewards[t+k]
                 G_t.append(g_t)
-        return torch.FloatTensor(G_t).to(device)
+            G_t = np.array(G_t)
+        return torch.from_numpy(G_t.reshape(len(G_t),-1)).to(device)
         
     def train(self, env, gamma=0.99, n=10):
         """
@@ -182,23 +170,25 @@ class A2C(object):
         mean_total, std_total = [], []
         # generate episode
         states, actions, rewards, action_logprobs = self.generate_episode(env)
-        states = torch.Tensor(states[:-1]).to(device)   # remove the last pseudo state
+        states = torch.Tensor(states[:-1]).to(device)   # remove the last terminal state  # (t, 1, 4) -> (t,4)
         if self.type != 2:   # Reinforce / baseline
-            G_t = self.get_G(rewards, gamma)
+            G_t = self.get_G(rewards, gamma)  # n
         if self.type == 1 or self.type == 2:  # baseline/A2C subtraction
-            baseline_value = self.critic(states)   # (1, t)
+            baseline_value = self.critic(states)   # (t, 1)
             if self.type ==2:  # A2C N-step 
                 G_t = self.get_G(rewards, gamma, baseline_value)
-            G_t_adj = torch.subtract(G_t, baseline_value)
-        else:
-            G_t_adj = G_t  # no baseline
+            G_t_adj = torch.subtract(G_t, baseline_value)    # (t, 1) , (t,1)
+        else:   
+            G_t_adj = G_t
         # weight actions by rewards/advantage and fit model 
         actor_history = self.fit_model(
-            action_logprobs, G_t_adj, self.actor_optimizer, self.reinforce_criterion, batch_size=int(len(states)*batch_size_ratio),
+            action_logprobs, G_t_adj, self.actor_optimizer, self.reinforce_criterion, batch_size=int(len(states)*batch_size_ratio), 
+            retain_graph=True
         )
         if self.type == 1 or self.type == 2:   # require a baseline value (A2C/Baseline)
             critic_history = self.fit_model(
-                baseline_value, G_t, self.critic_optimizer, self.baseline_criterion, batch_size=int(len(states)*batch_size_ratio),
+                baseline_value, G_t, self.critic_optimizer, self.baseline_criterion, batch_size=int(len(states)*batch_size_ratio), 
+                retain_graph=False
             )
         return actor_history
     
@@ -231,11 +221,10 @@ def main_a2c(args):
         actor = NeuralNet(input_size=nS, output_size=nA, 
                           activation=nn.Softmax(dim=1)).to(device)
         critic = NeuralNet(input_size=nS, output_size=1, 
-                           activation=nn.LeakyReLU(0.9)).to(device)
+                           activation=nn.Linear(1,1)).to(device)
         A2C_net = A2C(actor=actor, actor_lr=args.lr, N=args.n, nA=nA, 
                       critic=critic, critic_lr=args.critic_lr, baseline=args.use_baseline, a2c=args.use_a2c)
         for m in range(args.num_episodes):
-            print("Episode: {}".format(m))
             history['train'].append(A2C_net.train(env, gamma=gamma))
             if m % eval_freq == 0:
                 print("[Policy Evaluation]")
