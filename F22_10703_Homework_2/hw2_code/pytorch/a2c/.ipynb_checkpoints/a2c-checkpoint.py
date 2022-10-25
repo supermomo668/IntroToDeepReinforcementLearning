@@ -54,34 +54,6 @@ class A2C(object):
         self.actor_optimizer = torch.optim.Adam(actor.parameters(), lr=actor_lr)
         assert self.type is not None, "Type must be provided"
 
-    def reinforce_criterion(self, y_action_logprob, y_target):
-        loss = torch.multiply(y_action_logprob, y_target)    # shape (t,)
-        return -1.0*torch.mean(loss)
-    
-    def baseline_criterion(self, y_pred, y_true):
-        return torch.mean(torch.square(y_true-y_pred))
-        
-    def fit_model(self, y_action, y_target, optimizer, criterion, epochs=1, batch_size=1, retain_graph:bool=True):
-        """
-        Fit x (states) -> y (expected sum of reward/values)
-        """
-        self.actor.train()
-        assert y_action.shape==y_target.shape, f"shape mismatch{y_action.shape,y_target.shape}"
-        n_example = len(y_action)
-        history = dict.fromkeys(['loss'],[])
-        for e in range(epochs):
-            for i in range(int(np.ceil(n_example/batch_size))):
-                start_idx, end_idx = batch_size*i, min(batch_size*(i+1), n_example)
-                y_action_, y_target_ = y_action[start_idx: end_idx], y_target[start_idx: end_idx]
-                loss = criterion(y_action_, y_target_)
-                # # measure metrics and record loss
-                history['loss'].append(loss)
-                optimizer.zero_grad()
-                loss.backward(retain_graph=retain_graph)
-                optimizer.step()
-                if DEBUG: print(f"Latest Loss:{history['loss'][-1]}")
-        return history
-
     def evaluate_policy(self, env):
         # TODO: Compute Accumulative trajectory reward(set a trajectory length threshold if you want)
         """ compute rewards
@@ -153,7 +125,35 @@ class A2C(object):
                 G_t.append(g_t)
             G_t = np.array(G_t)
         return torch.from_numpy(G_t.reshape(len(G_t),-1)).to(device)
+    
+    def reinforce_criterion(self, y_action_logprob, y_target):
+        loss = torch.multiply(y_action_logprob, y_target)    # shape (t,)
+        return -1.0*torch.mean(loss)
+    
+    def baseline_criterion(self, y_pred, y_true):
+        return torch.mean(torch.square(y_true-y_pred))
         
+    def fit_model(self, y_action, y_target, optimizer, criterion, epochs=1, batch_size=1, retain_graph:bool=True):
+        """
+        Fit x (states) -> y (expected sum of reward/values)
+        """
+        self.actor.train()
+        assert y_action.shape==y_target.shape, f"shape mismatch{y_action.shape,y_target.shape}"
+        n_example = len(y_action)
+        history = dict.fromkeys(['loss'],[])
+        for e in range(epochs):
+            for i in range(int(np.ceil(n_example/batch_size))):
+                optimizer.zero_grad()
+                start_idx, end_idx = batch_size*i, min(batch_size*(i+1), n_example)
+                y_action_, y_target_ = y_action[start_idx: end_idx], y_target[start_idx: end_idx]
+                loss = criterion(y_action_, y_target_)
+                loss.backward(retain_graph=retain_graph)
+                # # measure metrics and record loss
+                history['loss'].append(loss)
+                #optimizer.step()   # moved to end of train loop
+                if DEBUG: print(f"Latest Loss:{history['loss'][-1]}")
+        return history
+    
     def train(self, env, gamma=0.99, n=10):
         """
         # Trains the model on a single episode using REINFORCE or A2C/A3C.
@@ -186,10 +186,14 @@ class A2C(object):
             retain_graph=True
         )
         if self.type == 1 or self.type == 2:   # require a baseline value (A2C/Baseline)
+            torch.autograd.set_detect_anomaly(True)
             critic_history = self.fit_model(
                 baseline_value, G_t, self.critic_optimizer, self.baseline_criterion, batch_size=int(len(states)*batch_size_ratio), 
-                retain_graph=False
+                retain_graph=True
             )
+        # update weights
+        self.actor_optimizer.step()
+        self.critic_optimizer.step()
         return actor_history
     
 def main_a2c(args):
@@ -220,8 +224,13 @@ def main_a2c(args):
         history = dict.fromkeys(['train','test'],[])
         actor = NeuralNet(input_size=nS, output_size=nA, 
                           activation=nn.Softmax(dim=1)).to(device)
-        critic = NeuralNet(input_size=nS, output_size=1, 
-                           activation=nn.Linear(1,1)).to(device)
+        if args.shared_backbone:
+            critic = nn.Sequential(*list(actor.children())[:-2] + [nn.Linear(16,1)])
+            torch.nn.init.xavier_normal_(list(critic.children())[6].weight)
+        else:
+            critic = NeuralNet(input_size=nS, output_size=1, 
+                               activation=nn.Linear(1,1)).to(device)
+        
         A2C_net = A2C(actor=actor, actor_lr=args.lr, N=args.n, nA=nA, 
                       critic=critic, critic_lr=args.critic_lr, baseline=args.use_baseline, a2c=args.use_a2c)
         for m in range(args.num_episodes):
@@ -259,7 +268,9 @@ if __name__=="__main__":
                             default=1e-4, help="The critic's learning rate.")
         parser.add_argument('--n', dest='n', type=int,
                             default=100, help="The value of N in N-step A2C.")
-
+        parser.add_argument('--shared_backbone', dest='shared_backbone', type=bool,
+                            default=True, help="Sharing backbone between critic/actor")
+        
         parser_group = parser.add_mutually_exclusive_group(required=False)
         parser_group.add_argument('--render', dest='render',
                                   action='store_true',
