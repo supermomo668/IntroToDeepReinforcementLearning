@@ -258,17 +258,19 @@ if __name__=="__main__":
                             default=10, help="Number of episodes to train on.")    # 3500
         parser.add_argument('--lr', dest='lr', type=float,
                             default=5e-4, help="The actor's learning rate.")
+        parser.add_argument('--use_a2c', dest='use_a2c', type=bool,
+                            default=True, help="Use A2C")
         parser.add_argument('--use_baseline', dest='use_baseline', type=bool,
-                            default=False, help="Use baseline model")
+                            default=True, help="Use baseline model")
         parser.add_argument('--baseline-lr', dest='baseline_lr', type=float,
                             default=5e-4, help="The actor's learning rate.")
         parser.add_argument('--critic-lr', dest='critic_lr', type=float,
                             default=1e-4, help="The critic's learning rate.")
         parser.add_argument('--n', dest='n', type=int,
-                            default=100, help="The value of N in N-step A2C.")
+                            default=10, help="The value of N in N-step A2C.")
         parser.add_argument('--shared_backbone', dest='shared_backbone', type=bool,
                             default=False, help="Sharing backbone between critic/actor")
-        
+
         parser_group = parser.add_mutually_exclusive_group(required=False)
         parser_group.add_argument('--render', dest='render',
                                   action='store_true',
@@ -278,12 +280,12 @@ if __name__=="__main__":
                                   help="Whether to render the environment.")
         parser.set_defaults(render=False)
 
-        return parser.parse_args()
+        return parser.parse_known_args()[0]    #.parse_args()
     
     args = parse_a2c_arguments()
     history, res, A2C_net = main_a2c(args)
     
-    ks = np.arange(l)*100
+    ks = np.arange(args.num_episodes/100)*100
     avs = np.mean(res, axis=0)
     maxs = np.max(res, axis=0)
     mins = np.min(res, axis=0)
@@ -296,6 +298,7 @@ if __name__=="__main__":
 
     if not os.path.exists('./plots'):
         os.mkdir('./plots')
+    print(A2C_net.type, args.n)
 
     if A2C_net.type == 'A2C' or A2C_net.type == 2:
         plt.title("A2C Learning Curve for N = {}".format(args.n), fontsize = 24)
@@ -305,5 +308,4 @@ if __name__=="__main__":
         plt.savefig("./plots/Baseline_Reinforce_curve.png".format(args.n))
     elif A2C_net.type == 'Reinforce' or A2C_net.type == 0: # Reinforce
         plt.title("Reinforce Learning Curve", fontsize = 24)
-        plt.savefig("./plots/Reinforce_curve.png")
-    plt.plot(res)
+        plt.savefig("./plots/Reinforce_curve(2).png") 
