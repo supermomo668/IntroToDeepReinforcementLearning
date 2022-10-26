@@ -222,14 +222,12 @@ def main_a2c(args):
         reward_means = []
         # TODO: create networks and setup reinforce/a2c
         history = dict.fromkeys(['train','test'],[])
-        actor = NeuralNet(input_size=nS, output_size=nA, 
-                          activation=nn.Softmax(dim=1)).to(device)
+        actor = NeuralNet(input_size=nS, output_size=nA, activation=nn.Softmax(dim=1)).to(device)
         if args.shared_backbone:
-            critic = nn.Sequential(*list(actor.children())[:-2] + [nn.Linear(16,1)])
+            critic = nn.Sequential(*list(actor.children())[:-2] + [nn.Linear(16,1), nn.LeakyReLU(0.9)])
             torch.nn.init.xavier_normal_(list(critic.children())[6].weight)
         else:
-            critic = NeuralNet(input_size=nS, output_size=1, 
-                               activation=nn.Linear(1,1)).to(device)
+            critic = NeuralNet(input_size=nS, output_size=1, activation=nn.LeakyReLU(0.9)).to(device)
         
         A2C_net = A2C(actor=actor, actor_lr=args.lr, N=args.n, nA=nA, 
                       critic=critic, critic_lr=args.critic_lr, baseline=args.use_baseline, a2c=args.use_a2c)
@@ -269,7 +267,7 @@ if __name__=="__main__":
         parser.add_argument('--n', dest='n', type=int,
                             default=100, help="The value of N in N-step A2C.")
         parser.add_argument('--shared_backbone', dest='shared_backbone', type=bool,
-                            default=True, help="Sharing backbone between critic/actor")
+                            default=False, help="Sharing backbone between critic/actor")
         
         parser_group = parser.add_mutually_exclusive_group(required=False)
         parser_group.add_argument('--render', dest='render',
