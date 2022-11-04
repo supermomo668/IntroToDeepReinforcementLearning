@@ -84,11 +84,11 @@ def plot_compare_num_episodes(mode, expert_file, keys, num_seeds=1, num_iteratio
 	reward_data, accuracy_data, loss_data, _ = \
 		generate_imitation_results(
 			mode, expert_file, keys, num_seeds, num_iterations)
-
+    
 	# Plot the results
 	plt.figure(figsize=(12, 4))
 	# WRITE CODE HERE
-
+    
 	# END
 	plt.savefig('p1_expert_data_%s.png' % mode, dpi=300)
 	# plt.show()
@@ -107,14 +107,14 @@ def main():
 	# Switch mode
 	mode = 'behavior cloning'
 	# mode = 'dagger'
-
+    
 	# Change the list of num_episodes below for testing and different tasks
 	keys = [100]  # [1, 10, 50, 100]
 	num_seeds = 3  # 3
 	num_iterations = 100    # Number of training iterations. Use a small number
 	# (e.g., 10) for debugging, and then try a larger number
 	# (e.g., 100).
-
+    
 	# Q2.1.1, Q2.2.1
 	plot_student_vs_expert(mode, expert_file, keys,
 	                       num_seeds=num_seeds, num_iterations=num_iterations)
